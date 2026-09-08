@@ -150,9 +150,10 @@ def generate_ram_aux_dataset_cmd(
                                                             "for log_snr (falls back to 0.0 otherwise)."),
     per_component_aux: bool = typer.Option(
         False, "--per-component-aux",
-        help="Emit 6 per-component aux scalars [log_snr_Z,N,E, log_rms_Z,N,E] instead of "
-             "the 2 Z/N/E-averaged scalars. Off by default so existing datasets reproduce "
-             "byte-for-byte when regenerated."),
+        help="Emit 6 per-component aux scalars (log_snr_Z, log_snr_N, log_snr_E, "
+             "log_rms_Z, log_rms_N, log_rms_E) instead of the 2 Z/N/E-averaged "
+             "scalars. Off by default so existing datasets reproduce byte-for-byte "
+             "when regenerated."),
     num_cores: Optional[int] = typer.Option(None, help="Worker processes (default: cpu_count - 1)."),
 ):
     """
@@ -286,14 +287,18 @@ def generate_spec_dual_dataset_cmd(
              "one amplitude scalar scores 0.95 AUC); drawing the surviving noise from "
              "the loud band drops that to ~0.86, and to ~0.78 at the top decile, which "
              "forces a model onto waveform character. Only affects which noise windows "
-             "are kept -- the pool, the events and the splits are unchanged."),
+             "are kept -- the pool, the events and the splits are unchanged. Pair it "
+             "with --baseline: the ranking divides each window by its own station's "
+             "noise sigma, and without station baselines it falls back to raw counts, "
+             "where 'loudest' across stations just means 'highest-gain instrument'."),
     hard_negative_band: Tuple[float, float] = typer.Option(
         (0.75, 0.99), help="Percentile band of the amplitude ranking to mine, as LOW HIGH. "
                            "The upper bound matters: the loudest tail of screened noise is "
                            "where a catalog-missed earthquake hides, so mining it would put "
                            "positives into the negative class."),
     match_negative_amplitude: bool = typer.Option(
-        False, help="Ignore --hard-negative-band and instead pick noise whose "
+        False, help="Requires --hard-negatives; ignored on its own. Ignores "
+                    "--hard-negative-band and instead picks noise whose "
                     "amplitude DISTRIBUTION mirrors the events'. The band puts a "
                     "hard floor under every negative while positives have none; on "
                     "a P-only window, where the loud phases are cut away, that makes "
@@ -745,8 +750,11 @@ def generate_catalog_dataset_cmd(
                               "cut is the bottleneck, since every event gets to be the test "
                               "fold once instead of only whichever ones land after the cut)."),
     embargo_days: Optional[float] = typer.Option(
-        None, help="Gap between splits. Defaults to the full label horizon, so no training "
-                   "window's label can reference an event inside the test period."),
+        None, help="ADDITIONAL hard time gap (days) dropped at each split boundary. "
+                   "Default: none. Label leakage is already closed without it -- "
+                   "chronological splits drop exactly those windows whose target event "
+                   "falls beyond their own split's boundary, which costs far less data "
+                   "than a blanket gap. Ignored by --split-mode random and loeo."),
     max_horizon_days: float = typer.Option(3650.0, help="Discard windows whose next major event is further out."),
     class_lo_days: Optional[float] = typer.Option(None, help="Lower risk-class boundary in days. Default: auto from train terciles."),
     class_hi_days: Optional[float] = typer.Option(None, help="Upper risk-class boundary in days. Default: auto from train terciles."),
@@ -895,7 +903,9 @@ def generate_groundmotion_dataset_cmd(
 ):
     """
     Builds the peak-ground-motion dataset for the Nurtas replication:
-    response-corrected (3, 300) input windows plus PGA/PGV labels.
+    response-corrected (3, round(3s * fs)) input windows plus PGA/PGV labels --
+    (3, 300) at the corpus's usual 100 Hz. Nothing resamples here, so a station
+    at another rate yields a differently-shaped tensor.
 
     Two targets are emitted per window. `*_fwd` is the peak strictly AFTER the
     input window closes -- a genuine forecast. `*_full` is the peak over the
