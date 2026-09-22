@@ -27,11 +27,13 @@ from seismic_cli import (anchor, catalog, eval_baseline, forecast, ram_aux,
                          ram_dual, regression, riskclass, spectrogram)
 from seismic_cli.core import (RamImageEncoder, compute_station_noise_baselines,
                               run_balanced_preprocessing)
+from seismic_cli.record import recorded
 
 app = typer.Typer(help="Seismic RAM-image / CNN earthquake detection pipeline.")
 
 
 @app.command("anchor-windows")
+@recorded("anchor-windows", out_param="output_base_dir", record_name="anchor-windows.json")
 def anchor_windows_cmd(
     source_dir: str = typer.Option(..., help="Directory of already-downloaded long-window mseed files (e.g. 60s)."),
     output_base_dir: str = typer.Option(..., help="Base directory where anchored short-window subfolders get written."),
@@ -64,6 +66,7 @@ def anchor_windows_cmd(
 
 
 @app.command("generate-dataset")
+@recorded("generate-dataset")
 def generate_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Directory of noise mseed files."),
@@ -128,6 +131,7 @@ def generate_dataset_cmd(
 
 
 @app.command("generate-ram-aux-dataset")
+@recorded("generate-ram-aux-dataset")
 def generate_ram_aux_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Directory of noise mseed files (also used for the "
@@ -187,6 +191,7 @@ def generate_ram_aux_dataset_cmd(
 
 
 @app.command("generate-spectrogram-dataset")
+@recorded("generate-spectrogram-dataset")
 def generate_spectrogram_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Directory of noise mseed files."),
@@ -249,6 +254,7 @@ def generate_spectrogram_dataset_cmd(
 
 
 @app.command("generate-spec-dual-dataset")
+@recorded("generate-spec-dual-dataset")
 def generate_spec_dual_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Directory of noise mseed files."),
@@ -355,6 +361,7 @@ def generate_spec_dual_dataset_cmd(
 
 
 @app.command("generate-spec-dual-aux-dataset")
+@recorded("generate-spec-dual-aux-dataset")
 def generate_spec_dual_aux_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Directory of noise mseed files (also used for the "
@@ -445,6 +452,7 @@ def generate_spec_dual_aux_dataset_cmd(
 
 
 @app.command("generate-dual-dataset")
+@recorded("generate-dual-dataset")
 def generate_dual_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Directory of noise mseed files."),
@@ -499,6 +507,7 @@ def generate_dual_dataset_cmd(
 
 
 @app.command("generate-dual-aux-dataset")
+@recorded("generate-dual-aux-dataset")
 def generate_dual_aux_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Directory of noise mseed files (also used for the "
@@ -567,6 +576,7 @@ def generate_dual_aux_dataset_cmd(
 
 
 @app.command("generate-regression-dataset")
+@recorded("generate-regression-dataset")
 def generate_regression_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Noise mseed directory (used for the amplitude reference)."),
@@ -655,6 +665,7 @@ def generate_regression_dataset_cmd(
 
 
 @app.command("generate-riskclass-dataset")
+@recorded("generate-riskclass-dataset")
 def generate_riskclass_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of earthquake mseed files."),
     noise_dir: str = typer.Option(..., help="Noise mseed directory (its own class here, not just an amplitude reference)."),
@@ -722,6 +733,7 @@ def generate_riskclass_dataset_cmd(
 
 
 @app.command("generate-catalog-dataset")
+@recorded("generate-catalog-dataset")
 def generate_catalog_dataset_cmd(
     catalog_path: str = typer.Option(..., help="Earthquake catalog CSV (AFAD/Kandilli export)."),
     output_dir: str = typer.Option(..., help="Where to write window tensors + manifest.csv."),
@@ -807,6 +819,7 @@ def generate_catalog_dataset_cmd(
 
 
 @app.command("generate-catalog-forecast-dataset")
+@recorded("generate-catalog-forecast-dataset")
 def generate_catalog_forecast_dataset_cmd(
     catalog_path: str = typer.Option(..., help="Earthquake catalog CSV (AFAD/Kandilli export)."),
     output_dir: str = typer.Option(..., help="Where to write window tensors + manifest.csv."),
@@ -883,6 +896,7 @@ def eval_sta_lta_cmd(
 
 
 @app.command("generate-groundmotion-dataset")
+@recorded("generate-groundmotion-dataset")
 def generate_groundmotion_dataset_cmd(
     eq_dir: str = typer.Option(..., help="Directory of 60s raw records (NOT the anchored 3s ones)."),
     catalog_path: str = typer.Option(..., help="Event catalog CSV with EventID + Magnitude (+ Latitude/Longitude)."),
