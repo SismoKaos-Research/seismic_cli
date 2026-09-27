@@ -5,10 +5,12 @@ from pathlib import Path
 import pandas as pd
 from obspy import UTCDateTime
 from obspy.clients.fdsn import Client
+from obspy.clients.fdsn.header import FDSNNoDataException
 
 # Earthquake waveform windows: (window_name, start_offset_sec, end_offset_sec)
 EARTHQUAKE_BATCHES = [
-    ("window_post_60s", 0, 60),
+    # ("window_post_60s", 0, 60),
+    ("window_m60_p120", -60, 120),
     # ("window_post_120s", 0, 120),
     # ("window_post_200s", 0, 200),
     # ("window_post_100s", 0, 100),
@@ -24,15 +26,30 @@ NOISE_BATCHES = [
 ]
 
 # General Settings
-CATALOG_FILE = Path("catalogs/extracted_earthquakes.csv")  # filtered: which events to actually download
-FULL_CATALOG_FILE = Path("catalogs/deprem_katalog_utc.csv")  # unfiltered: the complete raw catalog, used
+CATALOG_FILE = Path("catalogs/catalog_current.csv")  # filtered: which events to actually download
+FULL_CATALOG_FILE = Path("catalogs/catalog_current.csv")  # unfiltered: the complete raw catalog, used
                                                               # only to check noise windows for contamination
                                                               # by ANY cataloged event (including ones that
                                                               # were filtered out of the download list, e.g.
                                                               # small quakes below your magnitude threshold)
 BASE_OUTPUT_DIR = Path("data")
 FILE_LIMIT = 100000  # Set to None to process the full catalog
-SEARCH_RADIUS_DEG = 0.5  # ~55 km radius around event
+SEARCH_RADIUS_DEG = 1.8  # ~200 km: the largest radius any event is searched with
+
+# Which catalogue rows to download. catalog_current.csv is the full AFAD
+# catalogue from 2000, oldest first; KOERI's HH archive has little before
+# 2012 (an FDSNNoDataException for every request), so without these filters
+# FILE_LIMIT spends itself on years with no data.
+MIN_MAGNITUDE = 2.0
+START_DATE = "2011-10-01"
+NEWEST_FIRST = True
+
+# Station search radius by magnitude, (minimum magnitude, radius in degrees),
+# largest first. A small event is not recorded far away, so pulling distant
+# stations for it only downloads noise the dataset builder then drops.
+# Mirrors onset's catalog.VISIBILITY: M<2 to ~50 km, M2-3 to ~150 km, M3+ to
+# SEARCH_RADIUS_DEG.
+RADIUS_BY_MAGNITUDE = ((3.0, SEARCH_RADIUS_DEG), (2.0, 1.35), (float("-inf"), 0.45))
 FDSN_CLIENT = "KOERI"
 MAX_WORKERS = 15  # Number of concurrent threads
 
@@ -40,22 +57,36 @@ MAX_WORKERS = 15  # Number of concurrent threads
 # potentially contaminated when carving out "noise" windows. Widened from the
 # original 60s: larger events can have coda/aftershock energy ringing on for
 # several minutes, so a tight buffer risks labeling real seismic signal as noise.
-NOISE_CONTAMINATION_BUFFER_SEC = 300
+NOISE_CONTAMINATION_BUFFER_SEC = 0
 
 
-@functools.lru_cache(maxsize=2048)
-def fetch_station_queries(lat_round: float, lon_round: float, radius: float, client_name: str) -> tuple:
-    """Fetches and caches station queries within a specific radius.
+def radius_for(magnitude: float) -> float:
+    """Station search radius in degrees for an event of this magnitude."""
+    for m_min, radius in RADIUS_BY_MAGNITUDE:
+        if magnitude >= m_min:
+            return radius
+    return RADIUS_BY_MAGNITUDE[-1][1]
+
+
+@functools.lru_cache(maxsize=8192)
+def fetch_station_queries(lat_round: float, lon_round: float, radius: float, client_name: str,
+                          month: str) -> tuple:
+    """Fetches and caches the stations operating within `radius` during `month`.
 
     Reduces redundant network calls by caching station lists for coordinate
     pairs. Rounding inputs to two decimal places allows events within ~1.1 km
-    of each other to share the same station metadata.
+    of each other to share the same station metadata. The month is part of the
+    query, not just the key: without a time range FDSN returns every station
+    that ever existed there, and closed stations then fill the bulk request
+    with lines that return nothing (measured: 67 of 97 at 1.8 degrees for a
+    2025 event).
 
     Args:
         lat_round (float): Rounded latitude of the event.
         lon_round (float): Rounded longitude of the event.
         radius (float): Search radius in degrees.
         client_name (str): Name of the FDSN client to query (e.g., "KOERI").
+        month (str): "YYYY-MM" of the event; stations active during it are kept.
 
     Returns:
         tuple: A sequence of tuples containing (network, station, location, channel)
@@ -63,9 +94,12 @@ def fetch_station_queries(lat_round: float, lon_round: float, radius: float, cli
             FDSN query fails.
     """
     client = Client(client_name)
+    start = UTCDateTime(f"{month}-01")
+    end = UTCDateTime((pd.Timestamp(f"{month}-01") + pd.offsets.MonthBegin(1)).isoformat())
     try:
         inventory = client.get_stations(
-            latitude=lat_round, longitude=lon_round, maxradius=radius, channel="HH*"
+            latitude=lat_round, longitude=lon_round, maxradius=radius, channel="HH*",
+            starttime=start, endtime=end,
         )
         queries = [(net.code, sta.code, "*", "HH*") for net in inventory for sta in net]
         return tuple(queries)
@@ -121,7 +155,10 @@ def process_event_and_noise(
 
         # OPTIMIZATION 1: Use cached station queries
         lat_round, lon_round = round(lat, 2), round(lon, 2)
-        station_queries = fetch_station_queries(lat_round, lon_round, SEARCH_RADIUS_DEG, FDSN_CLIENT)
+        magnitude = float(row.get("Magnitude", float("nan")))
+        radius = radius_for(magnitude) if magnitude == magnitude else SEARCH_RADIUS_DEG
+        station_queries = fetch_station_queries(lat_round, lon_round, radius, FDSN_CLIENT,
+                                                event_time.strftime("%Y-%m"))
 
         if not station_queries:
             return f"[warning] No stations found for EventID location {event_id}"
@@ -187,8 +224,10 @@ def process_event_and_noise(
         # OPTIMIZATION 2: Single consolidated network request for ALL windows
         try:
             st_master = client.get_waveforms_bulk(bulk_query)
+        except FDSNNoDataException:
+            return f"[nodata] KOERI has no waveforms for {event_id} ({len(station_queries)} stations asked)"
         except Exception as e:
-            return f"[warning] No data returned for {event_id}: {e}"
+            return f"[error] Request failed for {event_id}: {type(e).__name__}: {str(e)[:200]}"
 
         # SLICE AND SAVE IN RAM
         for batch_name, starttime, endtime, output_file in tasks_to_slice:
@@ -265,7 +304,15 @@ def download_all_concurrent(
         raise FileNotFoundError(f"Catalog file not found: {catalog_path}")
 
     print(f"[init] Loading download catalog: {catalog_path.resolve()}")
-    df = pd.read_csv(catalog_path)
+    df = pd.read_csv(catalog_path, encoding="utf-8-sig")
+    n_all = len(df)
+    df = df[pd.to_numeric(df["Magnitude"], errors="coerce") >= MIN_MAGNITUDE]
+    when = pd.to_datetime(df["Date"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+    df = df[when >= pd.Timestamp(START_DATE)]
+    when = when[df.index]
+    df = df.loc[when.sort_values(ascending=not NEWEST_FIRST).index]
+    print(f"[init] {len(df)} of {n_all} events are M>={MIN_MAGNITUDE} from {START_DATE}"
+          f"{', newest first' if NEWEST_FIRST else ''}")
     df = _parse_catalog_times(df)
 
     if full_catalog_path is not None:
@@ -273,7 +320,7 @@ def download_all_concurrent(
         if not full_catalog_path.exists():
             raise FileNotFoundError(f"Full catalog file not found: {full_catalog_path}")
         print(f"[init] Loading full catalog for collision detection: {full_catalog_path.resolve()}")
-        df_collision_check = pd.read_csv(full_catalog_path)
+        df_collision_check = pd.read_csv(full_catalog_path, encoding="utf-8-sig")
         df_collision_check = _parse_catalog_times(df_collision_check)
     else:
         print(
